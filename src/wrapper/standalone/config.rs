@@ -23,12 +23,13 @@ pub struct WrapperConfig {
     pub audio_layout: Option<String>,
     /// The audio backend's sample rate.
     ///
-    /// This setting is ignored when using the JACK backend.
+    /// This setting is ignored when using the JACK backend, which uses the server's sample rate.
     #[clap(value_parser, short = 'r', long, default_value = "48000")]
     pub sample_rate: f32,
     /// The audio backend's period size.
     ///
-    /// This setting is ignored when using the JACK backend.
+    /// This setting is ignored when using the JACK backend, which follows the server's period size
+    /// as it changes (up to 8192 samples).
     #[clap(value_parser, short = 'p', long, default_value = "512")]
     pub period_size: u32,
 

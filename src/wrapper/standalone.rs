@@ -75,7 +75,8 @@ pub fn nih_export_standalone_with_args<P: Plugin, Args: IntoIterator<Item = Stri
         config::BackendType::Auto => {
             let result = backend::Jack::new::<P>(config.clone()).map(|backend| {
                 nih_log!("Using the JACK backend");
-                run_wrapper::<P, _>(backend, config.clone())
+                let config = backend.effective_config(config.clone());
+                run_wrapper::<P, _>(backend, config)
             });
 
             #[cfg(target_os = "linux")]
@@ -133,7 +134,10 @@ pub fn nih_export_standalone_with_args<P: Plugin, Args: IntoIterator<Item = Stri
             })
         }
         config::BackendType::Jack => match backend::Jack::new::<P>(config.clone()) {
-            Ok(backend) => run_wrapper::<P, _>(backend, config),
+            Ok(backend) => {
+                let config = backend.effective_config(config);
+                run_wrapper::<P, _>(backend, config)
+            }
             Err(err) => {
                 nih_error!("Could not initialize the JACK backend: {:#}", err);
                 false

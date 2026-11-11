@@ -21,6 +21,13 @@ use crate::prelude::{
 use crate::wrapper::util::buffer_management::{BufferManager, ChannelPointers};
 use crate::wrapper::util::{clamp_input_event_timing, clamp_output_event_timing};
 
+/// The largest period the JACK backend accepts. JACK2 never changes the period size behind a
+/// client's back, but PipeWire's JACK implementation does whenever the graph's quantum changes
+/// (another client asking for lower latency, a device switch, `clock.force-quantum`). 8192 is
+/// PipeWire's default `clock.max-quantum`. Buffers are preallocated for this size so the realtime
+/// callback can process any period up to it without allocating.
+pub const MAX_PERIOD_SIZE: u32 = 8192;
+
 /// Uses JACK audio and MIDI.
 pub struct Jack {
     audio_io_layout: AudioIOLayout,
@@ -66,7 +73,7 @@ impl<P: Plugin> Backend<P> for Jack {
             + Send,
     ) {
         let client = self.client.take().unwrap();
-        let buffer_size = client.buffer_size();
+        let buffer_size = Self::max_period_size(&client);
 
         // We'll preallocate the buffers here, and then assign them to the slices belonging to the
         // JACK ports later. For consistency with the other backends we'll reuse the
@@ -116,13 +123,13 @@ impl<P: Plugin> Backend<P> for Jack {
         let midi_input = self.midi_input.clone();
         let midi_output = self.midi_output.clone();
         let process_handler = ClosureProcessHandler::new(move |client, ps| {
-            // In theory we could handle `num_frames <= buffer_size`, but JACK will never chop up
-            // buffers like that so we'll just make it easier for ourselves by not supporting that
+            // PipeWire changes the period size at runtime. Any period up to the preallocated
+            // maximum is processed as-is, the same way the plugin APIs handle variable block sizes.
             let num_frames = ps.n_frames();
-            if num_frames != buffer_size {
+            if num_frames > buffer_size {
                 nih_error!(
-                    "Buffer size changed from {buffer_size} to {num_frames}. Buffer size changes \
-                     are currently not supported, aborting..."
+                    "The JACK period size grew to {num_frames}, beyond the supported maximum of \
+                     {buffer_size}, aborting..."
                 );
                 unparker.unpark();
                 return Control::Quit;
@@ -318,6 +325,25 @@ impl<P: Plugin> Backend<P> for Jack {
 }
 
 impl Jack {
+    /// The largest period this backend will process: the server's current period size, or
+    /// [`MAX_PERIOD_SIZE`] if that is larger.
+    fn max_period_size(client: &Client) -> u32 {
+        client.buffer_size().max(MAX_PERIOD_SIZE)
+    }
+
+    /// The JACK server, not the command line, decides the sample rate and the period size.
+    /// Returns `config` with the sample rate set to the server's and the period size set to the
+    /// largest period this backend will process, so the plugin is initialized with the values it
+    /// will actually see.
+    pub fn effective_config(&self, mut config: WrapperConfig) -> WrapperConfig {
+        if let Some(client) = &self.client {
+            config.sample_rate = client.sample_rate() as f32;
+            config.period_size = Self::max_period_size(client);
+        }
+
+        config
+    }
+
     /// Initialize the JACK backend. Returns an error if this failed for whatever reason. The plugin
     /// generic argument is to get the name for the client, and to know whether or not the
     /// standalone should expose JACK MIDI ports.
